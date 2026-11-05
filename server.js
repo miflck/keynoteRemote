@@ -22,6 +22,7 @@ const DEBOUNCE_MS = 400; // pro Seite
 const LOG_SIZE = 100; // so viele Befehle pro Seite werden für Nachholen gemerkt
 const ALLOWED_COMMANDS = new Set(["next", "previous"]);
 const SIDES = ["left", "right", "center"];
+const VIEWS = new Set(["vj", "keynote"]); // was vorne ist: die VJ-Player oder Keynote
 
 if (!ACCESS_TOKEN) {
   console.error("ACCESS_TOKEN fehlt. Bitte als Umgebungsvariable setzen.");
@@ -39,6 +40,10 @@ const page = `<!doctype html>
   body { margin: 0; padding: 12px; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; gap: 12px;
          font-family: -apple-system, system-ui, sans-serif; background: #111; color: #fff; }
   #status { text-align: center; padding: 4px; min-height: 1.6em; }
+  #view { display: flex; gap: 12px; }
+  #view:empty { display: none; }
+  #view button { flex: 1; padding: 12px 0; font-size: 1.1rem; background: #444; }
+  #view button.on { background: #2d5fa8; }
   #cols { flex: 3; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   #mid { flex: 2; min-height: 0; display: flex; }
   .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
@@ -56,12 +61,13 @@ const page = `<!doctype html>
 </head>
 <body>
 <div id="status">Verbinde …</div>
+<div id="view"></div>
 <div id="cols"></div>
 <div id="mid"></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
   var token = new URLSearchParams(location.hash.slice(1)).get("token");
-  var status = document.getElementById("status");
+  var statusEl = document.getElementById("status");
   var SIDES = [["left", "Links", "cols"], ["right", "Rechts", "cols"], ["center", "Mitte", "mid"]];
   var ui = {};
   var connected = false;
@@ -88,7 +94,26 @@ const page = `<!doctype html>
     ui[side].prev.addEventListener("click", function () { socket.volatile.emit("cmd", { side: side, cmd: "previous" }); });
   });
 
+  var viewBox = document.getElementById("view");
+  var viewButtons = {};
+  [["vj", "VJ vorne"], ["keynote", "Keynote vorne"]].forEach(function (entry) {
+    var b = document.createElement("button");
+    b.textContent = entry[1];
+    b.addEventListener("click", function () { socket.volatile.emit("cmd", { cmd: "view", mode: entry[0] }); });
+    viewButtons[entry[0]] = b;
+  });
+
   function render() {
+    var v = state.view || {};
+    // Nur anzeigen, wenn ein Mac mit CAN_FOCUS=1 verbunden ist.
+    viewBox.textContent = "";
+    if (v.available > 0) {
+      viewBox.appendChild(viewButtons.vj);
+      viewBox.appendChild(viewButtons.keynote);
+      viewButtons.vj.className = v.mode === "vj" ? "on" : "";
+      viewButtons.keynote.className = v.mode === "keynote" ? "on" : "";
+      viewButtons.vj.disabled = viewButtons.keynote.disabled = !connected;
+    }
     SIDES.forEach(function (entry) {
       var side = entry[0];
       var s = state[side] || { players: 0 };
@@ -101,12 +126,12 @@ const page = `<!doctype html>
     });
   }
 
-  socket.on("connect", function () { connected = true; status.textContent = ""; render(); });
+  socket.on("connect", function () { connected = true; statusEl.textContent = ""; render(); });
   socket.on("state", function (s) { state = s; render(); });
-  socket.on("disconnect", function () { connected = false; status.textContent = "Verbindung getrennt …"; render(); });
+  socket.on("disconnect", function () { connected = false; statusEl.textContent = "Verbindung getrennt …"; render(); });
   socket.on("connect_error", function (error) {
     connected = false;
-    status.textContent = error.message === "unauthorized" ? "Zugangscode fehlt oder ist falsch" : "Verbinde …";
+    statusEl.textContent = error.message === "unauthorized" ? "Zugangscode fehlt oder ist falsch" : "Verbinde …";
     render();
   });
   render();
@@ -133,6 +158,8 @@ const server = http.createServer((req, res) => {
 });
 
 const io = new Server(server);
+let view = null; // zuletzt gewählte Ansicht
+let lastViewAt = 0;
 
 // Zustand pro Seite. seq zählt die Befehle hoch; log merkt die letzten Befehle,
 // damit ein Mac nach kurzer Offline-Zeit verpasste Befehle nachholen kann.
@@ -144,13 +171,19 @@ function playerCount(side) {
   return io.sockets.adapter.rooms.get(`players:${side}`)?.size ?? 0;
 }
 
+function roomSize(room) {
+  return io.sockets.adapter.rooms.get(room)?.size ?? 0;
+}
+
 function snapshot() {
-  return Object.fromEntries(
+  const state = Object.fromEntries(
     SIDES.map((side) => {
       const { slide, total, error } = sides[side];
       return [side, { slide, total, error, players: playerCount(side) }];
     }),
   );
+  state.view = { mode: view, available: roomSize("focusers") };
+  return state;
 }
 
 function broadcastState() {
@@ -171,6 +204,7 @@ io.use((socket, next) => {
     socket.data.role = "player";
     socket.data.side = auth.side;
     socket.data.lastSeq = Number.isInteger(auth.lastSeq) ? auth.lastSeq : null;
+    socket.data.canFocus = auth.focus === true;
   } else {
     socket.data.role = "controller";
   }
@@ -182,6 +216,7 @@ io.on("connection", (socket) => {
     const { side, lastSeq } = socket.data;
     const st = sides[side];
     socket.join(`players:${side}`);
+    if (socket.data.canFocus) socket.join("focusers");
 
     // Aktuellen Zählerstand mitteilen, dann verpasste Befehle nachliefern.
     socket.emit("sync", st.seq);
@@ -206,7 +241,20 @@ io.on("connection", (socket) => {
 
     socket.on("cmd", (msg) => {
       if (!msg || typeof msg !== "object") return;
-      const { side, cmd } = msg;
+      const { side, cmd, mode } = msg;
+
+      // Umschalten: VJ-Player vorne oder Keynote vorne.
+      if (cmd === "view") {
+        if (!VIEWS.has(mode)) return;
+        const now = Date.now();
+        if (now - lastViewAt < DEBOUNCE_MS) return;
+        lastViewAt = now;
+        view = mode;
+        io.to("focusers").emit("view", mode);
+        broadcastState();
+        return;
+      }
+
       if (!SIDES.includes(side) || !ALLOWED_COMMANDS.has(cmd)) return;
 
       const st = sides[side];

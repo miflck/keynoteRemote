@@ -14,6 +14,13 @@ const { io } = require("socket.io-client");
 const SERVER_URL = process.env.SERVER_URL;
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const PLAYER_SIDE = process.env.PLAYER_SIDE;
+// CAN_FOCUS=1 nur auf dem Mac mit Keynote UND den VJ-Playern: dort schalten die Handy-Buttons
+// "VJ vorne" / "Keynote vorne" zwischen den laufenden VJ-Playern und Keynote um.
+// VJ_APP_NAMES: Prozessnamen der Player (Komma-getrennt). Installierte App: "VJ Player",
+// bei npm start: "Electron". VJ_HIDE=1 blendet die Player bei "Keynote vorne" zusätzlich aus.
+const CAN_FOCUS = process.env.CAN_FOCUS === "1";
+const VJ_APP_NAMES = (process.env.VJ_APP_NAMES || "VJ Player,Electron").split(",").map((n) => n.trim()).filter(Boolean);
+const VJ_HIDE = process.env.VJ_HIDE === "1";
 const POLL_MS = Number(process.env.POLL_MS ?? 3000);
 
 if (!SERVER_URL || !ACCESS_TOKEN || !["left", "right", "center"].includes(PLAYER_SIDE)) {
@@ -82,7 +89,7 @@ function report(result) {
 
 const socket = io(SERVER_URL, {
   // Funktion: bei jedem (Wieder-)Verbinden wird der aktuelle lastSeq mitgeschickt.
-  auth: (cb) => cb({ token: ACCESS_TOKEN, role: "player", side: PLAYER_SIDE, lastSeq }),
+  auth: (cb) => cb({ token: ACCESS_TOKEN, role: "player", side: PLAYER_SIDE, focus: CAN_FOCUS, lastSeq }),
 });
 
 socket.on("connect", () => {
@@ -109,6 +116,56 @@ socket.on("cmd", ({ seq, cmd } = {}) => {
     if (result.error) console.error(`"${cmd}" fehlgeschlagen:`, result.error);
     else console.log(`Ausgeführt: ${cmd} → Folie ${result.slide}/${result.total}`);
     report(result);
+  });
+});
+
+// Alle laufenden VJ-Player (Prozesse mit passendem Namen) ein- bzw. ausblenden und nach vorne holen.
+// Braucht für Terminal die Berechtigung "Automation → System Events".
+const VJ_SCRIPT = `
+on run argv
+  set mode to item 1 of argv
+  set found to 0
+  tell application "System Events"
+    repeat with p in (application processes whose background only is false)
+      if (rest of argv) contains (name of p) then
+        set found to found + 1
+        if mode is "front" then
+          set visible of p to true
+          set frontmost of p to true
+        else if mode is "hide" then
+          set visible of p to false
+        end if
+      end if
+    end repeat
+  end tell
+  if found is 0 then return "error|Kein VJ Player gefunden (" & (rest of argv as text) & ")"
+  return "ok"
+end run`;
+
+function osascript(args) {
+  return new Promise((resolve) => {
+    execFile("osascript", args, { timeout: 8000 }, (error, stdout) => {
+      if (error) resolve({ error: "osascript: " + error.message.split("\n")[0] });
+      else if (stdout.startsWith("error|")) resolve({ error: stdout.trim().split("|")[1] });
+      else resolve({});
+    });
+  });
+}
+
+socket.on("view", (mode) => {
+  if (mode !== "vj" && mode !== "keynote") return;
+  enqueue(async () => {
+    let result;
+    if (mode === "vj") {
+      result = await osascript(["-e", VJ_SCRIPT, "front", ...VJ_APP_NAMES]);
+    } else {
+      result = await osascript(["-e", 'if application "Keynote" is running then tell application "Keynote" to activate']);
+      if (VJ_HIDE && !result.error) result = await osascript(["-e", VJ_SCRIPT, "hide", ...VJ_APP_NAMES]);
+    }
+    if (result.error) console.error(`"${mode} vorne" fehlgeschlagen:`, result.error);
+    else console.log(`${mode === "vj" ? "VJ-Player" : "Keynote"} nach vorne geholt`);
+    const status = await runKeynote("status");
+    report(result.error ? { ...status, slide: status.slide, error: result.error } : status);
   });
 });
 
