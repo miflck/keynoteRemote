@@ -17,10 +17,11 @@ const PLAYER_SIDE = process.env.PLAYER_SIDE;
 // CAN_FOCUS=1 nur auf dem Mac mit Keynote UND den VJ-Playern: dort schalten die Handy-Buttons
 // "VJ vorne" / "Keynote vorne" zwischen den laufenden VJ-Playern und Keynote um.
 // VJ_APP_NAMES: Prozessnamen der Player (Komma-getrennt). Installierte App: "VJ Player",
-// bei npm start: "Electron". VJ_HIDE=1 blendet die Player bei "Keynote vorne" zusätzlich aus.
+// bei npm start: "Electron". Bei "Keynote vorne" werden die Player ausgeblendet (auch Vollbild-
+// Fenster, die sonst vorne bleiben); VJ_HIDE=0 schaltet das aus.
 const CAN_FOCUS = process.env.CAN_FOCUS === "1";
 const VJ_APP_NAMES = (process.env.VJ_APP_NAMES || "VJ Player,Electron").split(",").map((n) => n.trim()).filter(Boolean);
-const VJ_HIDE = process.env.VJ_HIDE === "1";
+const VJ_HIDE = process.env.VJ_HIDE !== "0";
 const POLL_MS = Number(process.env.POLL_MS ?? 3000);
 
 if (!SERVER_URL || !ACCESS_TOKEN || !["left", "right", "center"].includes(PLAYER_SIDE)) {
@@ -119,32 +120,42 @@ socket.on("cmd", ({ seq, cmd } = {}) => {
   });
 });
 
-// Alle laufenden VJ-Player (Prozesse mit passendem Namen) ein- bzw. ausblenden und nach vorne holen.
-// Braucht für Terminal die Berechtigung "Automation → System Events".
-const VJ_SCRIPT = `
+// Alle laufenden VJ-Player (Prozesse mit passendem Namen) einblenden/ausblenden und Keynote bzw.
+// die Player nach vorne holen. Ein einziger osascript-Aufruf (schnell: nach Namen filtern statt
+// alle Prozesse durchzugehen). Braucht für Terminal die Berechtigung "Automation → System Events".
+//   front        Player einblenden und nach vorne
+//   keynote      Player ausblenden (Vollbild-Fenster bleiben sonst vorne), dann Keynote nach vorne
+//   keynote-keep Keynote nach vorne, Player bleiben sichtbar
+const VIEW_SCRIPT = `
 on run argv
   set mode to item 1 of argv
   set found to 0
   tell application "System Events"
-    repeat with p in (application processes whose background only is false)
-      if (rest of argv) contains (name of p) then
+    repeat with n in (rest of argv)
+      repeat with p in (application processes whose name is (contents of n))
         set found to found + 1
         if mode is "front" then
           set visible of p to true
           set frontmost of p to true
-        else if mode is "hide" then
+        else if mode is "keynote" then
           set visible of p to false
         end if
-      end if
+      end repeat
     end repeat
   end tell
-  if found is 0 then return "error|Kein VJ Player gefunden (" & (rest of argv as text) & ")"
+  if mode is "front" then
+    if found is 0 then return "error|Kein VJ Player gefunden (" & (rest of argv as text) & ")"
+    return "ok"
+  end if
+  if application "Keynote" is running then
+    tell application "Keynote" to activate
+  end if
   return "ok"
 end run`;
 
 function osascript(args) {
   return new Promise((resolve) => {
-    execFile("osascript", args, { timeout: 8000 }, (error, stdout) => {
+    execFile("osascript", args, { timeout: 15000 }, (error, stdout) => {
       if (error) resolve({ error: "osascript: " + error.message.split("\n")[0] });
       else if (stdout.startsWith("error|")) resolve({ error: stdout.trim().split("|")[1] });
       else resolve({});
@@ -152,21 +163,15 @@ function osascript(args) {
   });
 }
 
-socket.on("view", (mode) => {
+// Läuft bewusst nicht in der Keynote-Warteschlange, damit der Wechsel sofort passiert.
+socket.on("view", async (mode) => {
   if (mode !== "vj" && mode !== "keynote") return;
-  enqueue(async () => {
-    let result;
-    if (mode === "vj") {
-      result = await osascript(["-e", VJ_SCRIPT, "front", ...VJ_APP_NAMES]);
-    } else {
-      result = await osascript(["-e", 'if application "Keynote" is running then tell application "Keynote" to activate']);
-      if (VJ_HIDE && !result.error) result = await osascript(["-e", VJ_SCRIPT, "hide", ...VJ_APP_NAMES]);
-    }
-    if (result.error) console.error(`"${mode} vorne" fehlgeschlagen:`, result.error);
-    else console.log(`${mode === "vj" ? "VJ-Player" : "Keynote"} nach vorne geholt`);
-    const status = await runKeynote("status");
-    report(result.error ? { ...status, slide: status.slide, error: result.error } : status);
-  });
+  const scriptMode = mode === "vj" ? "front" : VJ_HIDE ? "keynote" : "keynote-keep";
+  const started = Date.now();
+  const result = await osascript(["-e", VIEW_SCRIPT, scriptMode, ...VJ_APP_NAMES]);
+  if (result.error) console.error(`"${mode} vorne" fehlgeschlagen:`, result.error);
+  else console.log(`${mode === "vj" ? "VJ-Player" : "Keynote"} nach vorne geholt (${Date.now() - started} ms)`);
+  if (result.error) report(result); // sonst meldet die Abfrage unten die Folie ohnehin gleich neu
 });
 
 // Folie regelmässig abfragen (z. B. falls jemand von Hand weiterschaltet).
