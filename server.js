@@ -1,5 +1,5 @@
 // Render.com-Server: nimmt Befehle von Handys an und verteilt sie an die Macs.
-// Zwei Seiten ("left" / "right"): jeder Mac meldet sich mit seiner Seite an und
+// Drei Seiten ("left" / "right" / "center"): jeder Mac meldet sich mit seiner Seite an und
 // bekommt nur die Befehle dieser Seite (Socket.IO-Rooms).
 //
 // Render-Einstellungen:
@@ -10,6 +10,8 @@
 // Handy-Adresse: https://DEIN-DIENST.onrender.com/#token=DEIN_CODE
 // Health-Check:  https://DEIN-DIENST.onrender.com/health
 
+require("dotenv").config(); // lokal: Werte aus .env (auf Render gelten die Environment-Variablen)
+
 const crypto = require("crypto");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -19,7 +21,7 @@ const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const DEBOUNCE_MS = 400; // pro Seite
 const LOG_SIZE = 100; // so viele Befehle pro Seite werden für Nachholen gemerkt
 const ALLOWED_COMMANDS = new Set(["next", "previous"]);
-const SIDES = ["left", "right"];
+const SIDES = ["left", "right", "center"];
 
 if (!ACCESS_TOKEN) {
   console.error("ACCESS_TOKEN fehlt. Bitte als Umgebungsvariable setzen.");
@@ -34,15 +36,17 @@ const page = `<!doctype html>
 <title>Keynote-Steuerung</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 12px; min-height: 100dvh; display: flex; flex-direction: column; gap: 12px;
+  body { margin: 0; padding: 12px; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; gap: 12px;
          font-family: -apple-system, system-ui, sans-serif; background: #111; color: #fff; }
   #status { text-align: center; padding: 4px; min-height: 1.6em; }
-  #cols { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-  h2 { margin: 0; text-align: center; font-size: 1.2rem; }
-  .info { text-align: center; font-size: .85rem; min-height: 1.3em; opacity: .8; }
+  #cols { flex: 3; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  #mid { flex: 2; min-height: 0; display: flex; }
+  .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+  #mid .col { flex: 1; }
+  h2 { margin: 0; text-align: center; font-size: 1.1rem; }
+  .info { text-align: center; font-size: .8rem; min-height: 1.2em; opacity: .8; }
   .info.err { color: #ff8a80; opacity: 1; }
-  button { border: 0; border-radius: 14px; color: #fff; touch-action: manipulation;
+  button { border: 0; min-height: 0; border-radius: 14px; color: #fff; touch-action: manipulation;
            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
   button:disabled { opacity: .35; }
   .next { flex: 3; background: #0a7f45; font-size: 1.6rem; }
@@ -53,11 +57,12 @@ const page = `<!doctype html>
 <body>
 <div id="status">Verbinde …</div>
 <div id="cols"></div>
+<div id="mid"></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
   var token = new URLSearchParams(location.hash.slice(1)).get("token");
   var status = document.getElementById("status");
-  var SIDES = [["left", "Links"], ["right", "Rechts"]];
+  var SIDES = [["left", "Links", "cols"], ["right", "Rechts", "cols"], ["center", "Mitte", "mid"]];
   var ui = {};
   var connected = false;
   var state = {};
@@ -71,7 +76,7 @@ const page = `<!doctype html>
       '<button class="next"><span>Weiter</span><span class="num">–</span></button>' +
       '<button class="prev">Zurück</button>';
     col.querySelector("h2").textContent = entry[1];
-    document.getElementById("cols").appendChild(col);
+    document.getElementById(entry[2]).appendChild(col);
     ui[side] = {
       info: col.querySelector(".info"),
       num: col.querySelector(".num"),

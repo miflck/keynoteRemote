@@ -1,6 +1,6 @@
 # KeynoteRemote
 
-Keynote auf zwei Macs (links / rechts) per Handy fernsteuern. Node.js + Socket.IO.
+Keynote auf mehrere Macs (links / rechts / Mitte) per Handy fernsteuern. Node.js + Socket.IO.
 
 - `server.js` – läuft auf Render.com, liefert die Handy-Oberfläche und verteilt Befehle.
 - `client.js` – läuft auf jedem Mac und steuert Keynote per `osascript`.
@@ -17,7 +17,9 @@ Handy-Adresse: `https://DEIN-DIENST.onrender.com/#token=DEIN_CODE`
 npm install
 SERVER_URL=https://DEIN-DIENST.onrender.com ACCESS_TOKEN=DEIN_CODE PLAYER_SIDE=left node client.js
 ```
-Auf dem anderen Mac `PLAYER_SIDE=right`. Optional `POLL_MS=0` schaltet die 3-s-Folienabfrage aus.
+Auf den anderen Macs `PLAYER_SIDE=right` bzw. `PLAYER_SIDE=center` (Mitte, quer unter den beiden anderen).
+
+Alternativ die Werte in eine `.env` schreiben (Vorlage: `.env.example`), dann reicht `node client.js`. Lokal den Server testen: `ACCESS_TOKEN` in `.env`, dann `node server.js`. Optional `POLL_MS=0` schaltet die 3-s-Folienabfrage aus.
 
 ## Hinweise
 - Terminal braucht auf jedem Mac die Automation-Berechtigung für Keynote.

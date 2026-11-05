@@ -3,8 +3,10 @@
 // Einrichtung:
 //   npm install socket.io-client
 //
-// Start (PLAYER_SIDE = left oder right, je nach Mac):
+// Start (PLAYER_SIDE = left, right oder center, je nach Mac):
 //   SERVER_URL=https://DEIN-DIENST.onrender.com ACCESS_TOKEN=DEIN_CODE PLAYER_SIDE=left node client.js
+
+require("dotenv").config(); // Werte aus .env (pro Mac)
 
 const { execFile } = require("child_process");
 const { io } = require("socket.io-client");
@@ -14,8 +16,8 @@ const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const PLAYER_SIDE = process.env.PLAYER_SIDE;
 const POLL_MS = Number(process.env.POLL_MS ?? 3000);
 
-if (!SERVER_URL || !ACCESS_TOKEN || !["left", "right"].includes(PLAYER_SIDE)) {
-  console.error("SERVER_URL, ACCESS_TOKEN und PLAYER_SIDE (left|right) müssen gesetzt sein.");
+if (!SERVER_URL || !ACCESS_TOKEN || !["left", "right", "center"].includes(PLAYER_SIDE)) {
+  console.error("SERVER_URL, ACCESS_TOKEN und PLAYER_SIDE (left|right|center) müssen gesetzt sein.");
   process.exit(1);
 }
 
