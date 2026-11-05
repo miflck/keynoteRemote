@@ -1,0 +1,15 @@
+{
+  "name": "keynote-remote",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Keynote auf mehreren Macs (links/rechts) per Handy fernsteuern",
+  "scripts": {
+    "server": "node server.js",
+    "client": "node client.js"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.0",
+    "socket.io-client": "^4.8.0"
+  },
+  "engines": { "node": ">=18" }
+}
