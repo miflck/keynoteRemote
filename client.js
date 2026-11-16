@@ -42,7 +42,13 @@ end tell`;
 }
 
 const SCRIPT_BY_COMMAND = {
-  next: buildScript("show next\n  delay 0.15"),
+  // Nach der letzten Folie beendet Keynote die Präsentation: dann wieder bei Folie 1 starten.
+  next: buildScript(`show next
+  delay 0.15
+  if not playing then
+    start front document from slide 1 of front document
+    delay 0.6
+  end if`),
   previous: buildScript("show previous\n  delay 0.15"),
   status: buildScript(""),
 };
