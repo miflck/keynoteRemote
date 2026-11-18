@@ -22,7 +22,8 @@ const DEBOUNCE_MS = 400; // pro Seite
 const LOG_SIZE = 100; // so viele Befehle pro Seite werden für Nachholen gemerkt
 const ALLOWED_COMMANDS = new Set(["next", "previous"]);
 const SIDES = ["left", "right", "center"];
-const VIEWS = new Set(["vj", "keynote"]); // was vorne ist: die VJ-Player oder Keynote
+// Zwei Gruppen von Bildschirmen, die getrennt zwischen VJ-Playern und Keynote wechseln.
+const GROUPS = { center: ["center"], sides: ["left", "right"] };
 
 if (!ACCESS_TOKEN) {
   console.error("ACCESS_TOKEN fehlt. Bitte als Umgebungsvariable setzen.");
@@ -42,8 +43,9 @@ const page = `<!doctype html>
   #status { text-align: center; padding: 4px; min-height: 1.6em; }
   #view { display: flex; gap: 12px; }
   #view:empty { display: none; }
-  #view button { flex: 1; padding: 12px 0; font-size: 1.1rem; background: #444; }
-  #view button.on { background: #2d5fa8; }
+  #view button { flex: 1; padding: 10px 0; font-size: 1.05rem; background: #2d5fa8; }
+  #view button small { font-size: .8rem; opacity: .85; }
+  #view button.keynote { background: #8a4b12; }
   #cols { flex: 3; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   #mid { flex: 2; min-height: 0; display: flex; }
   .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
@@ -95,25 +97,31 @@ const page = `<!doctype html>
   });
 
   var viewBox = document.getElementById("view");
+  var GROUPS = [["sides", "Links / Rechts"], ["center", "Mitte"]];
   var viewButtons = {};
-  [["vj", "VJ vorne"], ["keynote", "Keynote vorne"]].forEach(function (entry) {
+  GROUPS.forEach(function (entry) {
     var b = document.createElement("button");
-    b.textContent = entry[1];
-    b.addEventListener("click", function () { socket.volatile.emit("cmd", { cmd: "view", mode: entry[0] }); });
+    b.addEventListener("click", function () { socket.volatile.emit("cmd", { cmd: "toggle", group: entry[0] }); });
     viewButtons[entry[0]] = b;
   });
 
   function render() {
     var v = state.view || {};
-    // Nur anzeigen, wenn ein Mac mit CAN_FOCUS=1 verbunden ist.
+    // Je Gruppe nur anzeigen, wenn ein Mac mit CAN_FOCUS=1 verbunden ist.
     viewBox.textContent = "";
-    if (v.available > 0) {
-      viewBox.appendChild(viewButtons.vj);
-      viewBox.appendChild(viewButtons.keynote);
-      viewButtons.vj.className = v.mode === "vj" ? "on" : "";
-      viewButtons.keynote.className = v.mode === "keynote" ? "on" : "";
-      viewButtons.vj.disabled = viewButtons.keynote.disabled = !connected;
-    }
+    GROUPS.forEach(function (entry) {
+      var g = v[entry[0]] || { available: 0 };
+      if (!(g.available > 0)) return;
+      var b = viewButtons[entry[0]];
+      b.textContent = "";
+      b.appendChild(document.createTextNode(entry[1]));
+      var small = document.createElement("small");
+      small.textContent = g.mode === "keynote" ? "Keynote vorne" : "VJ vorne";
+      b.appendChild(small);
+      b.className = g.mode === "keynote" ? "keynote" : "";
+      b.disabled = !connected;
+      viewBox.appendChild(b);
+    });
     SIDES.forEach(function (entry) {
       var side = entry[0];
       var s = state[side] || { players: 0 };
@@ -158,8 +166,9 @@ const server = http.createServer((req, res) => {
 });
 
 const io = new Server(server);
-let view = null; // zuletzt gewählte Ansicht
-let lastViewAt = 0;
+// Was ist je Gruppe vorne: "vj" oder "keynote" (Annahme am Anfang: VJ).
+const view = { center: "vj", sides: "vj" };
+const lastViewAt = { center: 0, sides: 0 };
 
 // Zustand pro Seite. seq zählt die Befehle hoch; log merkt die letzten Befehle,
 // damit ein Mac nach kurzer Offline-Zeit verpasste Befehle nachholen kann.
@@ -175,6 +184,11 @@ function roomSize(room) {
   return io.sockets.adapter.rooms.get(room)?.size ?? 0;
 }
 
+// Anzahl verbundener Macs mit CAN_FOCUS=1 in einer Gruppe.
+function focusCount(group) {
+  return GROUPS[group].reduce((sum, side) => sum + roomSize(`focusers:${side}`), 0);
+}
+
 function snapshot() {
   const state = Object.fromEntries(
     SIDES.map((side) => {
@@ -182,7 +196,7 @@ function snapshot() {
       return [side, { slide, total, error, players: playerCount(side) }];
     }),
   );
-  state.view = { mode: view, available: roomSize("focusers") };
+  state.view = Object.fromEntries(Object.keys(GROUPS).map((g) => [g, { mode: view[g], available: focusCount(g) }]));
   return state;
 }
 
@@ -216,7 +230,7 @@ io.on("connection", (socket) => {
     const { side, lastSeq } = socket.data;
     const st = sides[side];
     socket.join(`players:${side}`);
-    if (socket.data.canFocus) socket.join("focusers");
+    if (socket.data.canFocus) socket.join(`focusers:${side}`);
 
     // Aktuellen Zählerstand mitteilen, dann verpasste Befehle nachliefern.
     socket.emit("sync", st.seq);
@@ -241,16 +255,16 @@ io.on("connection", (socket) => {
 
     socket.on("cmd", (msg) => {
       if (!msg || typeof msg !== "object") return;
-      const { side, cmd, mode } = msg;
+      const { side, cmd, group } = msg;
 
-      // Umschalten: VJ-Player vorne oder Keynote vorne.
-      if (cmd === "view") {
-        if (!VIEWS.has(mode)) return;
+      // Gruppe zwischen VJ-Playern und Keynote umschalten.
+      if (cmd === "toggle") {
+        if (!Object.hasOwn(GROUPS, group)) return;
         const now = Date.now();
-        if (now - lastViewAt < DEBOUNCE_MS) return;
-        lastViewAt = now;
-        view = mode;
-        io.to("focusers").emit("view", mode);
+        if (now - lastViewAt[group] < DEBOUNCE_MS) return;
+        lastViewAt[group] = now;
+        view[group] = view[group] === "keynote" ? "vj" : "keynote";
+        for (const s of GROUPS[group]) io.to(`focusers:${s}`).emit("view", view[group]);
         broadcastState();
         return;
       }
