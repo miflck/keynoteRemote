@@ -34,11 +34,18 @@ const page = `<!doctype html>
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Keynote">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111111">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="/icon-512.png">
 <title>Keynote-Steuerung</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 12px; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; gap: 12px;
+  body { margin: 0; padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); height: 100dvh; overflow: hidden; display: flex; flex-direction: column; gap: 12px;
          font-family: -apple-system, system-ui, sans-serif; background: #111; color: #fff; }
   #status { text-align: center; padding: 4px; min-height: 1.6em; }
   #view { display: flex; gap: 12px; }
@@ -46,54 +53,59 @@ const page = `<!doctype html>
   #view button { flex: 1; padding: 10px 0; font-size: 1.05rem; background: #2d5fa8; }
   #view button small { font-size: .8rem; opacity: .85; }
   #view button.keynote { background: #8a4b12; }
-  #cols { flex: 3; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  #mid { flex: 2; min-height: 0; display: flex; }
-  .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
-  #mid .col { flex: 1; }
-  h2 { margin: 0; text-align: center; font-size: 1.1rem; }
-  .info { text-align: center; font-size: .8rem; min-height: 1.2em; opacity: .8; }
-  .info.err { color: #ff8a80; opacity: 1; }
+  #big { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+  #big .next { flex: 3; background: #0a7f45; font-size: 2.4rem; }
+  #big .nums { font-size: 1rem; font-weight: 400; opacity: .9; font-variant-numeric: tabular-nums; }
+  #big .prev { flex: 1; background: #444; font-size: 1.7rem; }
+  #small { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .mini { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .mini .head { text-align: center; font-size: .78rem; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini .head.err { color: #ff8a80; opacity: 1; }
+  .mini .btns { display: flex; gap: 4px; }
+  .mini button { flex: 1; padding: 12px 0; font-size: 1.3rem; background: #333; border-radius: 10px; }
+  .mini .next { background: #0a6a3b; }
   button { border: 0; min-height: 0; border-radius: 14px; color: #fff; touch-action: manipulation;
            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
   button:disabled { opacity: .35; }
-  .next { flex: 3; background: #0a7f45; font-size: 1.6rem; }
-  .next .num { font-size: 2.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .prev { flex: 1; background: #444; font-size: 1.4rem; }
 </style>
 </head>
 <body>
 <div id="status">Verbinde …</div>
 <div id="view"></div>
-<div id="cols"></div>
-<div id="mid"></div>
+<div id="big">
+  <button class="next" id="bigNext"><span>Weiter</span><span class="nums" id="nums"></span></button>
+  <button class="prev" id="bigPrev">Zurück</button>
+</div>
+<div id="small"></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
   var token = new URLSearchParams(location.hash.slice(1)).get("token");
+  // Code merken, falls die Home-Bildschirm-App ohne #token=… gestartet wird.
+  try { if (token) localStorage.setItem("token", token); else token = localStorage.getItem("token"); } catch (e) {}
   var statusEl = document.getElementById("status");
-  var SIDES = [["left", "Links", "cols"], ["right", "Rechts", "cols"], ["center", "Mitte", "mid"]];
+  var SIDES = [["left", "Links"], ["right", "Rechts"], ["center", "Mitte"]];
   var ui = {};
   var connected = false;
   var state = {};
   var socket = io({ auth: { token: token, role: "controller" } });
+  // volatile: Ein Klick ohne Verbindung wird nicht später nachgeholt.
+  function send(side, cmd) { socket.volatile.emit("cmd", { side: side, cmd: cmd }); }
+
+  var bigNext = document.getElementById("bigNext");
+  var bigPrev = document.getElementById("bigPrev");
+  var nums = document.getElementById("nums");
+  bigNext.addEventListener("click", function () { send("all", "next"); });
+  bigPrev.addEventListener("click", function () { send("all", "previous"); });
 
   SIDES.forEach(function (entry) {
     var side = entry[0];
-    var col = document.createElement("section");
-    col.className = "col";
-    col.innerHTML = '<h2></h2><div class="info"></div>' +
-      '<button class="next"><span>Weiter</span><span class="num">–</span></button>' +
-      '<button class="prev">Zurück</button>';
-    col.querySelector("h2").textContent = entry[1];
-    document.getElementById(entry[2]).appendChild(col);
-    ui[side] = {
-      info: col.querySelector(".info"),
-      num: col.querySelector(".num"),
-      next: col.querySelector(".next"),
-      prev: col.querySelector(".prev"),
-    };
-    // volatile: Ein Klick ohne Verbindung wird nicht später nachgeholt.
-    ui[side].next.addEventListener("click", function () { socket.volatile.emit("cmd", { side: side, cmd: "next" }); });
-    ui[side].prev.addEventListener("click", function () { socket.volatile.emit("cmd", { side: side, cmd: "previous" }); });
+    var mini = document.createElement("section");
+    mini.className = "mini";
+    mini.innerHTML = '<div class="head"></div><div class="btns"><button class="prev">‹</button><button class="next">›</button></div>';
+    document.getElementById("small").appendChild(mini);
+    ui[side] = { head: mini.querySelector(".head"), next: mini.querySelector(".next"), prev: mini.querySelector(".prev") };
+    ui[side].next.addEventListener("click", function () { send(side, "next"); });
+    ui[side].prev.addEventListener("click", function () { send(side, "previous"); });
   });
 
   var viewBox = document.getElementById("view");
@@ -122,16 +134,22 @@ const page = `<!doctype html>
       b.disabled = !connected;
       viewBox.appendChild(b);
     });
+    var online = 0;
+    var parts = [];
     SIDES.forEach(function (entry) {
       var side = entry[0];
       var s = state[side] || { players: 0 };
       var el = ui[side];
       var offline = s.players === 0;
-      el.num.textContent = s.slide ? s.slide + " / " + s.total : "–";
-      el.info.textContent = offline ? "Mac offline" : (s.error || (s.players + " Mac(s)"));
-      el.info.className = "info" + (!offline && s.error ? " err" : "");
+      if (!offline) online++;
+      var num = s.slide ? s.slide + " / " + s.total : "–";
+      if (!offline) parts.push(entry[1] + " " + (s.slide || "–"));
+      el.head.textContent = entry[1] + " · " + (offline ? "offline" : (s.error ? s.error : num));
+      el.head.className = "head" + (!offline && s.error ? " err" : "");
       el.next.disabled = el.prev.disabled = !connected || offline;
     });
+    nums.textContent = parts.join("  ·  ");
+    bigNext.disabled = bigPrev.disabled = !connected || online === 0;
   }
 
   socket.on("connect", function () { connected = true; statusEl.textContent = ""; render(); });
@@ -142,6 +160,23 @@ const page = `<!doctype html>
     statusEl.textContent = error.message === "unauthorized" ? "Zugangscode fehlt oder ist falsch" : "Verbinde …";
     render();
   });
+  // Handy-Bildschirm wach halten (Wake Lock) und nach dem Aufwecken sofort neu verbinden.
+  var wakeLock = null;
+  function keepAwake() {
+    if (!("wakeLock" in navigator) || wakeLock) return;
+    navigator.wakeLock.request("screen").then(function (lock) {
+      wakeLock = lock;
+      lock.addEventListener("release", function () { wakeLock = null; });
+    }).catch(function () {});
+  }
+  document.addEventListener("pointerdown", keepAwake); // manche Browser verlangen eine Berührung
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") return;
+    keepAwake();
+    if (!socket.connected) socket.connect();
+  });
+  keepAwake();
+
   render();
 </script>
 </body>
@@ -154,7 +189,24 @@ function isValidToken(token) {
   return crypto.timingSafeEqual(received, expected);
 }
 
+// App-Icons für den Home-Bildschirm (Ordner public/).
+const fs = require("fs");
+const path = require("path");
+const ICONS = {
+  "/apple-touch-icon.png": "apple-touch-icon.png",
+  "/apple-touch-icon-precomposed.png": "apple-touch-icon.png",
+  "/icon-512.png": "icon-512.png",
+};
+
 const server = http.createServer((req, res) => {
+  const urlPath = req.url.split("?")[0];
+  if (Object.hasOwn(ICONS, urlPath)) {
+    fs.readFile(path.join(__dirname, "public", ICONS[urlPath]), (error, data) => {
+      if (error) return res.writeHead(404).end();
+      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" }).end(data);
+    });
+    return;
+  }
   if (req.url === "/health") {
     res.setHeader("Content-Type", "text/plain");
     res.end("ok");
@@ -225,6 +277,19 @@ io.use((socket, next) => {
   next();
 });
 
+// Befehl für eine Seite nummerieren, merken und an deren Macs schicken.
+function dispatch(side, cmd) {
+  const st = sides[side];
+  const now = Date.now();
+  if (now - st.lastCommandAt < DEBOUNCE_MS) return;
+  st.lastCommandAt = now;
+
+  const entry = { seq: ++st.seq, cmd };
+  st.log.push(entry);
+  if (st.log.length > LOG_SIZE) st.log.shift();
+  io.to(`players:${side}`).emit("cmd", entry);
+}
+
 io.on("connection", (socket) => {
   if (socket.data.role === "player") {
     const { side, lastSeq } = socket.data;
@@ -269,17 +334,10 @@ io.on("connection", (socket) => {
         return;
       }
 
-      if (!SIDES.includes(side) || !ALLOWED_COMMANDS.has(cmd)) return;
-
-      const st = sides[side];
-      const now = Date.now();
-      if (now - st.lastCommandAt < DEBOUNCE_MS) return;
-      st.lastCommandAt = now;
-
-      const entry = { seq: ++st.seq, cmd };
-      st.log.push(entry);
-      if (st.log.length > LOG_SIZE) st.log.shift();
-      io.to(`players:${side}`).emit("cmd", entry);
+      if (!ALLOWED_COMMANDS.has(cmd)) return;
+      // "all": alle Seiten gleichzeitig (Macs, die gerade offline sind, holen es beim Verbinden nach).
+      if (side === "all") SIDES.forEach((sd) => dispatch(sd, cmd));
+      else if (SIDES.includes(side)) dispatch(side, cmd);
     });
   }
 
