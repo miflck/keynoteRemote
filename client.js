@@ -50,6 +50,15 @@ const SCRIPT_BY_COMMAND = {
     delay 0.6
   end if`),
   previous: buildScript("show previous\n  delay 0.15"),
+  // Zurück an den Anfang, ohne Keynote nach vorne zu holen (läuft auch im Hintergrund).
+  reset: buildScript(`try
+    jump to slide 1 of front document
+  on error
+    stop front document
+    delay 0.3
+    start front document from slide 1 of front document
+  end try
+  delay 0.3`),
   status: buildScript(""),
 };
 

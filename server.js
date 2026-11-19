@@ -20,7 +20,7 @@ const PORT = process.env.PORT || 3000;
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const DEBOUNCE_MS = 400; // pro Seite
 const LOG_SIZE = 100; // so viele Befehle pro Seite werden für Nachholen gemerkt
-const ALLOWED_COMMANDS = new Set(["next", "previous"]);
+const ALLOWED_COMMANDS = new Set(["next", "previous", "reset"]);
 const SIDES = ["left", "right", "center"];
 // Zwei Gruppen von Bildschirmen, die getrennt zwischen VJ-Playern und Keynote wechseln.
 const GROUPS = { center: ["center"], sides: ["left", "right"] };
@@ -57,6 +57,8 @@ const page = `<!doctype html>
   #big .next { flex: 3; background: #0a7f45; font-size: 2.4rem; }
   #big .nums { font-size: 1rem; font-weight: 400; opacity: .9; font-variant-numeric: tabular-nums; }
   #big .prev { flex: 1; background: #444; font-size: 1.7rem; }
+  #reset { padding: 8px 0; font-size: .95rem; background: #7a1f1f; flex-direction: row; }
+  #reset.armed { background: #c62828; }
   #small { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .mini { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .mini .head { text-align: center; font-size: .78rem; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -76,6 +78,7 @@ const page = `<!doctype html>
   <button class="next" id="bigNext"><span>Weiter</span><span class="nums" id="nums"></span></button>
   <button class="prev" id="bigPrev">Zurück</button>
 </div>
+<button id="reset">Reset: alle an den Anfang</button>
 <div id="small"></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
@@ -96,6 +99,17 @@ const page = `<!doctype html>
   var nums = document.getElementById("nums");
   bigNext.addEventListener("click", function () { send("all", "next"); });
   bigPrev.addEventListener("click", function () { send("all", "previous"); });
+
+  // Reset braucht zwei Tipper (gegen versehentliches Auslösen).
+  var resetBtn = document.getElementById("reset");
+  var resetTimer = null;
+  function disarm() { clearTimeout(resetTimer); resetTimer = null; resetBtn.classList.remove("armed"); resetBtn.textContent = "Reset: alle an den Anfang"; }
+  resetBtn.addEventListener("click", function () {
+    if (resetTimer) { disarm(); send("all", "reset"); return; }
+    resetBtn.classList.add("armed");
+    resetBtn.textContent = "Nochmal tippen zum Zurücksetzen";
+    resetTimer = setTimeout(disarm, 3000);
+  });
 
   SIDES.forEach(function (entry) {
     var side = entry[0];
